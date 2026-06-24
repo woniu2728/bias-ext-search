@@ -1,0 +1,1 @@
+{"id":"search","name":"","version":"0.1.0","category":"feature","authors":["Bias"],"dependencies":["core","core","users","discussions","posts","tags"],"django":{"app_config":"bias_ext_search.backend.apps.ExtensionConfig","app_label":"search","migration_module":"bias_ext_search.backend.django_migrations"},"backend":{"entry":"bias_ext_search.backend.ext"}}
