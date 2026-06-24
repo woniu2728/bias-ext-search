@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: bias-ext-search
+Version: 0.1.0
+Summary: Bias search Extension
+Requires-Python: >=3.11
+Requires-Dist: bias-core<0.2,>=0.1
