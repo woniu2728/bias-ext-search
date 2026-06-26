@@ -1,2 +1,0 @@
-[bias.extensions]
-search = bias_ext_search.backend.ext:extend
