@@ -197,7 +197,7 @@ import {
   getStateBlock,
   getUiCopy,
   useForumStore
-} from '@bias/forum'
+} from '@bias/core/forum'
 import { getSearchModalSections, getSearchSources, useSearchFilterCatalog } from '@bias/search'
 import {
   getTrackedDiscussionIdsFromDiscussionItems,

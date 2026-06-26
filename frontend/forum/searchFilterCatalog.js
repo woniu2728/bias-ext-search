@@ -4,7 +4,7 @@ import {
   computed,
   ref } from '@bias/core'
 import { getUiCopy
-} from '@bias/forum'
+} from '@bias/core/forum'
 
 const registeredSearchFilters = []
 const searchFilterCatalogPromises = new Map()

@@ -6,6 +6,15 @@ requires-python = ">=3.11"
 dependencies = ["bias-core>=0.1,<0.2"]
 [project.entry-points."bias.extensions"]
 search = "bias_ext_search.backend.ext:extend"
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bias_ext_search*"]
+
+[tool.setuptools.data-files]
+"bias_extensions/search" = ["extension.json"]
+"bias_extensions/search/frontend/admin" = ["frontend/admin/index.js", "frontend/admin/SearchSettingsPage.vue"]
+"bias_extensions/search/frontend/forum" = ["frontend/forum/GlobalSearchModal.vue", "frontend/forum/HeaderSearchBox.vue", "frontend/forum/index.js", "frontend/forum/sdk.d.ts", "frontend/forum/sdk.js", "frontend/forum/search.js", "frontend/forum/searchFilterCatalog.js", "frontend/forum/searchFrontendRegistry.js", "frontend/forum/searchMeta.js", "frontend/forum/searchMeta.test.js", "frontend/forum/SearchResultCard.vue", "frontend/forum/SearchResultSection.vue", "frontend/forum/SearchResultsView.vue", "frontend/forum/SearchStats.vue", "frontend/forum/useSearchResultsLoadState.js", "frontend/forum/useSearchResultsLoadState.test.js", "frontend/forum/useSearchResultsPage.js", "frontend/forum/useSearchResultsPageLifecycle.js", "frontend/forum/useSearchResultsPageLifecycle.test.js", "frontend/forum/useSearchResultsRealtimeState.js", "frontend/forum/useSearchResultsRealtimeState.test.js", "frontend/forum/useSearchResultsResourceState.js", "frontend/forum/useSearchResultsResourceState.test.js", "frontend/forum/useSearchResultsRouteActions.js", "frontend/forum/useSearchResultsRouteActions.test.js", "frontend/forum/useSearchResultsViewBindings.js", "frontend/forum/useSearchResultsViewBindings.test.js", "frontend/forum/useSearchResultsViewModel.js", "frontend/forum/useSearchRouteState.js"]
+

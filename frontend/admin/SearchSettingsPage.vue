@@ -66,7 +66,7 @@
 
 <script setup>
 import { onMounted, ref } from '@bias/core'
-import { adminApi, AdminInlineMessage, useModalStore } from '@bias/admin/components'
+import { adminApi, AdminInlineMessage, useModalStore } from '@bias/core/components/admin'
 
 const modalStore = useModalStore()
 const loading = ref(false)

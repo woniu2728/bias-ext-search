@@ -8,7 +8,7 @@ import {
   getStateBlock,
   getUiCopy,
   useForumStore
-} from '@bias/forum'
+} from '@bias/core/forum'
 import { useForumRealtimeStore } from '@bias/realtime'
 import { getSearchSources, useSearchFilterCatalog } from '@bias/search'
 import { useSearchResultsLoadState } from './useSearchResultsLoadState'

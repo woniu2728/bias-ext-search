@@ -3,7 +3,7 @@ import {
   computed } from '@bias/core'
 import { useStartDiscussionAction } from '@bias/discussions'
 import { getUiCopy
-} from '@bias/forum'
+} from '@bias/core/forum'
 import { resolveSearchMetaPayload } from '@bias/search'
 import { useSearchResultsPage } from './useSearchResultsPage'
 import { useSearchResultsViewBindings } from './useSearchResultsViewBindings'

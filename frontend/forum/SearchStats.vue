@@ -12,7 +12,7 @@
 </template>
 
 <script setup>
-import { getUiCopy } from '@bias/forum'
+import { getUiCopy } from '@bias/core/forum'
 
 defineProps({
   items: {

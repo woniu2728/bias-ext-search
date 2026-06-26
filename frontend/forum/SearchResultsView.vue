@@ -97,7 +97,7 @@ import {
   ForumStateBlock,
   useComposerStore,
   useForumStore
-} from '@bias/forum'
+} from '@bias/core/forum'
 import { DiscussionListSidebarStartButton } from '@bias/discussions'
 import SearchResultCard from './SearchResultCard.vue'
 import SearchResultSection from './SearchResultSection.vue'

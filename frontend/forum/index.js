@@ -4,7 +4,7 @@ import {
   createUiTextCopy,
   extendForum,
   getUiCopy
-} from '@bias/forum'
+} from '@bias/core/forum'
 import { buildDiscussionPath } from '@bias/discussions'
 import { renderTwemojiHtml } from '@bias/emoji'
 import { buildUserPath, getUserAvatarColor, getUserInitial } from '@bias/users'
