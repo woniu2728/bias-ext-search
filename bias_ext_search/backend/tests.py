@@ -13,7 +13,7 @@ from bias_core.forum_registry import get_forum_registry
 from bias_core.models import AuditLog
 from bias_core.search_index_service import get_search_index_definitions
 from bias_core.services import PaginationService
-from extensions.testing import ExtensionRuntimeTestMixin
+from bias_core.testing import ExtensionRuntimeTestMixin
 from bias_core.extensions.runtime import (
     create_runtime_discussion,
     get_runtime_discussion_model,
@@ -273,7 +273,7 @@ class ChineseSearchTests(TestCase):
         self.assertTrue({"中文", "搜索"}.intersection(tokens))
 
     def test_search_targets_must_be_registered_by_runtime_provider(self):
-        with patch("apps.core.extensions.runtime.get_extension_host_service", return_value=None):
+        with patch("bias_core.extensions.runtime.get_extension_host_service", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "搜索目标未注册: search.target.discussion"):
                 SearchService.search_discussions("中文搜索")
 
@@ -937,4 +937,6 @@ class SearchIndexAdminApiTests(TestCase):
         self.assertFalse(payload["supported"])
         self.assertEqual(payload["status"], "unsupported")
         self.assertIsNone(payload["lastRebuild"])
+
+
 
