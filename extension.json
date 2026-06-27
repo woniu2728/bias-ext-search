@@ -24,5 +24,8 @@
   "extra": {
     "auto_install": true,
     "auto_enable": true
+  },
+  "security": {
+    "capabilities_notice": "Search extension; indexes and queries discussion, post, tag, and user-visible content."
   }
 }
