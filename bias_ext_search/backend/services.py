@@ -229,8 +229,12 @@ class SearchService:
                     title_match_q | Q(id__in=Subquery(visible_post_discussion_ids))
                 )
 
-        for definition, parsed_value in parsed_filters.get("discussion", []):
-            queryset = definition.applier(queryset, parsed_value, {"user": user, "query": query, "text_query": text_query})
+        queryset = SearchService._apply_parsed_filters(
+            queryset,
+            parsed_filters,
+            "discussion",
+            {"user": user, "query": query, "text_query": text_query},
+        )
 
         queryset = SearchService._apply_extension_search_mutators(
             "discussion",
@@ -253,8 +257,12 @@ class SearchService:
         elif text_query:
             queryset = queryset.filter(SearchService.build_text_query(['content'], text_query))
 
-        for definition, parsed_value in parsed_filters.get("post", []):
-            queryset = definition.applier(queryset, parsed_value, {"user": user, "query": query, "text_query": text_query})
+        queryset = SearchService._apply_parsed_filters(
+            queryset,
+            parsed_filters,
+            "post",
+            {"user": user, "query": query, "text_query": text_query},
+        )
 
         queryset = SearchService._apply_extension_search_mutators(
             "post",
@@ -283,6 +291,26 @@ class SearchService:
             queryset,
             {"query": query, "text_query": query},
         )
+
+    @staticmethod
+    def _apply_parsed_filters(queryset, parsed_filters: dict[str, list], target: str, context: dict):
+        grouped_filters = []
+        grouped_by_definition = {}
+
+        for definition, parsed_value in parsed_filters.get(target, []):
+            definition_key = id(definition)
+            group = grouped_by_definition.get(definition_key)
+            if group is None:
+                group = [definition, []]
+                grouped_by_definition[definition_key] = group
+                grouped_filters.append(group)
+            group[1].append(parsed_value)
+
+        output = queryset
+        for definition, values in grouped_filters:
+            value = values[0] if len(values) == 1 else list(values)
+            output = definition.applier(output, value, context)
+        return output
 
     @staticmethod
     def _apply_extension_search_mutators(target: str, queryset, context: dict):
