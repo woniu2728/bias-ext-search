@@ -79,6 +79,11 @@ export function getRegisteredSearchFilters(target = '') {
     .sort((left, right) => (left.order || 100) - (right.order || 100))
 }
 
+export function resetSearchFilterCatalogForTest() {
+  registeredSearchFilters.splice(0, registeredSearchFilters.length)
+  searchFilterCatalogPromises.clear()
+}
+
 export async function ensureSearchFilterCatalogLoaded(target = 'all') {
   const normalizedTarget = normalizeSearchTarget(target)
 
@@ -150,7 +155,8 @@ function upsertSearchFilter(item) {
 
 function normalizeSearchTarget(target = '') {
   const normalized = String(target || '').trim().toLowerCase()
+  if (!normalized) return 'all'
   if (['discussion', 'discussions'].includes(normalized)) return 'discussions'
   if (['post', 'posts'].includes(normalized)) return 'posts'
-  return 'all'
+  return normalized
 }

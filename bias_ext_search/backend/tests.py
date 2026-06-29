@@ -7,13 +7,18 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from ninja.testing import TestClient
 from ninja_jwt.tokens import RefreshToken
 
-from bias_core.forum_registry import get_forum_registry
-from bias_core.models import AuditLog
-from bias_core.search_index_service import get_search_index_definitions
-from bias_core.services import PaginationService
-from bias_core.testing import ExtensionRuntimeTestMixin
+from bias_core.extensions.testing import (
+    AuditLog,
+    ExtensionRuntimeTestMixin,
+    PaginationService,
+    build_extension_test_api,
+    build_extension_test_host,
+    get_forum_registry,
+    get_search_index_definitions,
+)
 from bias_core.extensions.runtime import (
     create_runtime_discussion,
     get_runtime_discussion_model,
@@ -83,6 +88,41 @@ class SearchIndexDefinitionTests(ExtensionRuntimeTestMixin, TestCase):
             "normalize_limit",
         ):
             self.assertTrue(callable(service[key]), key)
+
+    def test_search_extension_boots_with_system_users_target_only(self):
+        application = build_extension_test_host("search")
+
+        self.assertIn("search.service", application.get_service_provider_keys(extension_id="search"))
+        self.assertEqual(SearchService.get_builtin_search_targets(), ("user",))
+        self.assertEqual(SearchService.get_builtin_search_targets(include_users=False), ())
+        self.assertEqual(SearchService.get_search_totals("anything"), {
+            "discussion_total": 0,
+            "post_total": 0,
+            "user_total": 0,
+            "total": 0,
+        })
+        self.assertEqual(SearchService.search_discussions("anything"), ([], 0))
+        self.assertEqual(SearchService.search_posts("anything"), ([], 0))
+        self.assertEqual(SearchService.search_users("anything"), ([], 0))
+        self.assertEqual(SearchService.get_search_suggestions("anything"), [])
+
+    def test_search_api_handles_missing_content_targets_as_optional_capabilities(self):
+        api = build_extension_test_api("search", urls_namespace="search_optional_targets")
+        client = TestClient(api)
+
+        response = client.get("/search?q=anything&type=all")
+        filters_response = client.get("/search/filters")
+        unavailable_response = client.get("/search?q=anything&type=posts")
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["total"], 0)
+        self.assertEqual(response.json()["discussions"], [])
+        self.assertEqual(response.json()["posts"], [])
+        self.assertEqual(response.json()["users"], [])
+        self.assertEqual(filters_response.status_code, 200, filters_response.content)
+        self.assertEqual(filters_response.json()["filters"], [])
+        self.assertEqual(unavailable_response.status_code, 400, unavailable_response.content)
+        self.assertEqual(unavailable_response.json()["error"], "搜索目标不可用")
 
     def test_search_capabilities_are_filtered_when_extension_disabled(self):
         self.disable_extension_for_test("search")
@@ -161,6 +201,37 @@ class ChineseSearchTests(TestCase):
 
         self.assertEqual(total, 1)
         self.assertEqual(discussions[0].id, discussion.id)
+
+    def test_discussion_search_marks_matching_reply_as_most_relevant_post(self):
+        discussion = create_runtime_discussion(
+            title="Unrelated title",
+            content="Opening content",
+            user=self.user,
+        )
+        reply = create_runtime_post(
+            discussion_id=discussion.id,
+            content="reply-specific-needle",
+            user=self.user,
+        )
+
+        discussions, total = SearchService.search_discussions("reply-specific-needle", user=self.user)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(discussions[0].id, discussion.id)
+        self.assertEqual(discussions[0].most_relevant_post_id, reply.id)
+
+    def test_discussion_search_leaves_title_match_for_first_post_fallback(self):
+        discussion = create_runtime_discussion(
+            title="Title fallback needle",
+            content="Opening content",
+            user=self.user,
+        )
+
+        discussions, total = SearchService.search_discussions("Title fallback needle", user=self.user)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(discussions[0].id, discussion.id)
+        self.assertIsNone(getattr(discussions[0], "most_relevant_post_id", None))
 
     def test_discussion_list_supports_registered_unanswered_sort(self):
         first_discussion = create_runtime_discussion(
@@ -272,10 +343,11 @@ class ChineseSearchTests(TestCase):
         self.assertIn("中文搜索", tokens)
         self.assertTrue({"中文", "搜索"}.intersection(tokens))
 
-    def test_search_targets_must_be_registered_by_runtime_provider(self):
+    def test_search_targets_are_optional_runtime_providers(self):
         with patch("bias_core.extensions.runtime.get_extension_host_service", return_value=None):
-            with self.assertRaisesRegex(RuntimeError, "搜索目标未注册: search.target.discussion"):
-                SearchService.search_discussions("中文搜索")
+            self.assertEqual(SearchService.search_discussions("中文搜索"), ([], 0))
+            self.assertEqual(SearchService.search_posts("中文搜索"), ([], 0))
+            self.assertEqual(SearchService.search_users("中文搜索"), ([], 0))
 
     def test_postgres_full_text_is_only_used_for_latin_queries_on_postgres(self):
         self.assertTrue(SearchService.should_use_postgres_full_text("postgres search", vendor="postgresql"))
@@ -748,6 +820,12 @@ class SearchApiTests(ChineseSearchTests):
         self.assertIn("created:YYYY-MM", {item["syntax"] for item in discussions_payload["filters"]})
         self.assertIn("created:YYYY-MM", {item["syntax"] for item in posts_payload["filters"]})
 
+    def test_search_filters_api_rejects_unregistered_target(self):
+        response = self.client.get("/api/search/filters", {"target": "unknown-target"})
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json()["error"], "无效的搜索过滤目标")
+
     def test_search_discussions_does_not_fetch_first_post_per_result(self):
         create_runtime_discussion(
             title="搜索摘要优化一",
@@ -760,7 +838,7 @@ class SearchApiTests(ChineseSearchTests):
             user=self.user,
         )
 
-        with patch("extensions.posts.backend.models.Post.objects.get", side_effect=AssertionError("不应逐条 get 首帖")):
+        with patch.object(get_runtime_post_model().objects, "get", side_effect=AssertionError("不应逐条 get 首帖")):
             discussions, total = SearchService.search_discussions("搜索摘要优化", user=self.user)
 
         self.assertEqual(total, 2)
@@ -779,7 +857,7 @@ class SearchApiTests(ChineseSearchTests):
             user=self.user,
         )
 
-        with patch("extensions.posts.backend.models.Post.objects.in_bulk", side_effect=AssertionError("不应额外批量查询首帖")):
+        with patch.object(get_runtime_post_model().objects, "in_bulk", side_effect=AssertionError("不应额外批量查询首帖")):
             discussions, total = SearchService.search_discussions("子查询摘要优化", user=self.user)
 
         self.assertEqual(total, 2)
@@ -937,6 +1015,3 @@ class SearchIndexAdminApiTests(TestCase):
         self.assertFalse(payload["supported"])
         self.assertEqual(payload["status"], "unsupported")
         self.assertIsNone(payload["lastRebuild"])
-
-
-

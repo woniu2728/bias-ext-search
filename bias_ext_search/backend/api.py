@@ -48,6 +48,17 @@ def serialize_user_search_result(user, resource_options=None):
     )
 
 
+def serialize_extra_search_result(target: str, item, resource_options=None):
+    resource = SearchService.get_extra_search_target_config(target).get("resource") or target
+    resource_options = resource_options or ResourceQueryOptions()
+    return _get_resource_registry().serialize(
+        resource,
+        item,
+        only=resource_options.fields,
+        include=resource_options.includes,
+    )
+
+
 def serialize_search_filter(definition):
     return {
         "code": definition.code,
@@ -72,7 +83,7 @@ def search(
     limit = SearchService.normalize_limit(limit)
 
     if not q or len(q.strip()) == 0:
-        return {
+        payload = {
             "total": 0,
             "page": page,
             "limit": limit,
@@ -84,6 +95,10 @@ def search(
             "posts": [],
             "users": [],
         }
+        for target in SearchService.get_extra_search_targets():
+            payload[f"{target}_total"] = 0
+            payload[SearchService.get_extra_search_results_key(target)] = []
+        return payload
 
     query = q.strip()
     user = get_optional_user(request)
@@ -95,6 +110,14 @@ def search(
     discussion_resource_options = parse_resource_query_options(request, "search_discussion")
     post_resource_options = parse_resource_query_options(request, "search_post")
     user_resource_options = parse_resource_query_options(request, "search_user")
+    extra_targets = SearchService.get_extra_search_targets()
+    extra_resource_options = {
+        target: parse_resource_query_options(
+            request,
+            SearchService.get_extra_search_target_config(target).get("resource") or target,
+        )
+        for target in extra_targets
+    }
 
     if preview and type == "all":
         result = SearchService.search_preview(
@@ -118,6 +141,7 @@ def search(
                 for item in result["users"]
             ],
         }
+        _serialize_extra_search_sections(response_payload, result, extra_resource_options)
         return JsonResponse(response_payload)
 
     context = SearchService.build_search_context(query, user=user, include_users=can_search_users)
@@ -146,9 +170,13 @@ def search(
                 for item in result["users"]
             ],
         }
+        _serialize_extra_search_sections(response_payload, result, extra_resource_options)
         return JsonResponse(response_payload)
 
     if type == "discussions":
+        if not SearchService.has_search_target("discussion"):
+            return api_error("搜索目标不可用", status=400)
+
         discussions, total = SearchService.search_discussions(
             query,
             page,
@@ -182,6 +210,9 @@ def search(
         })
 
     if type == "posts":
+        if not SearchService.has_search_target("post"):
+            return api_error("搜索目标不可用", status=400)
+
         posts, total = SearchService.search_posts(
             query,
             page,
@@ -215,6 +246,9 @@ def search(
         })
 
     if type == "users":
+        if not SearchService.has_search_target("user"):
+            return api_error("搜索目标不可用", status=400)
+
         if not can_search_users:
             return api_error("没有权限搜索用户", status=403)
 
@@ -244,7 +278,63 @@ def search(
             "users": [serialize_user_search_result(item, resource_options=user_resource_options) for item in users],
         })
 
+    if type in extra_targets:
+        items, total = SearchService.search_extra_target(
+            type,
+            query,
+            page,
+            limit,
+            user=user,
+            context=context,
+            preload=lambda queryset: apply_resource_preloads(
+                _get_resource_registry(),
+                queryset,
+                SearchService.get_extra_search_target_config(type).get("resource") or type,
+                resource_options=extra_resource_options[type],
+            ),
+        )
+        results_key = SearchService.get_extra_search_results_key(type)
+        payload = {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "type": type,
+            "discussion_total": context.discussion_total,
+            "post_total": context.post_total,
+            "user_total": context.user_total,
+            "discussions": [],
+            "posts": [],
+            "users": [],
+        }
+        for target in extra_targets:
+            payload[f"{target}_total"] = total if target == type else context.extra_totals.get(target, 0)
+            payload[SearchService.get_extra_search_results_key(target)] = (
+                [
+                    serialize_extra_search_result(target, item, resource_options=extra_resource_options[target])
+                    for item in items
+                ]
+                if target == type
+                else []
+            )
+        payload[results_key] = payload.get(results_key, [])
+        return JsonResponse(payload)
+
     return api_error("无效的搜索类型", status=400)
+
+
+def _serialize_extra_search_sections(response_payload: dict, result: dict, extra_resource_options: dict) -> None:
+    extra_results = result.get("extra_results") or {}
+    for target, items in extra_results.items():
+        results_key = SearchService.get_extra_search_results_key(target)
+        options = extra_resource_options.get(target)
+        response_payload[results_key] = [
+            serialize_extra_search_result(target, item, resource_options=options)
+            for item in items
+        ]
+    response_payload["extra_results"] = {
+        target: response_payload.get(SearchService.get_extra_search_results_key(target), [])
+        for target in extra_results
+    }
 
 
 @router.get("/search/suggestions", response=SearchSuggestionSchema, tags=["Search"])
@@ -263,14 +353,18 @@ def get_search_suggestions(request, q: str, limit: int = 5):
 
 @router.get("/search/filters", response=SearchFilterCatalogSchema, tags=["Search"])
 def get_search_filters(request, target: str = "all"):
+    normalized_target = (target or "all").strip().lower()
+    builtin_targets = SearchService.get_builtin_search_targets()
     target_map = {
-        "all": ("discussion", "post"),
-        "discussions": ("discussion",),
-        "discussion": ("discussion",),
-        "posts": ("post",),
-        "post": ("post",),
+        "all": tuple(item for item in ("discussion", "post") if item in builtin_targets),
+        "discussions": ("discussion",) if "discussion" in builtin_targets else (),
+        "discussion": ("discussion",) if "discussion" in builtin_targets else (),
+        "posts": ("post",) if "post" in builtin_targets else (),
+        "post": ("post",) if "post" in builtin_targets else (),
     }
-    targets = target_map.get((target or "all").strip().lower())
+    targets = target_map.get(normalized_target)
+    if targets is None and normalized_target in SearchService.get_extra_search_targets():
+        targets = (normalized_target,)
     if targets is None:
         return api_error("无效的搜索过滤目标", status=400)
 

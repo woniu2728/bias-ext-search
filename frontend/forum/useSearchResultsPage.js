@@ -87,23 +87,22 @@ export function useSearchResultsPage({ route, router }) {
   }
 
   const filterItems = computed(() => {
-    const counts = {
-      discussions: resourceState.discussionTotal.value,
-      posts: resourceState.postTotal.value,
-      users: resourceState.userTotal.value,
-    }
+    const counts = resourceState.sourceTotals.value || {}
+    const totalCount = searchSources.reduce((sum, item) => (
+      sum + Number(counts[item.routeType || item.type] || 0)
+    ), 0)
 
     return [
       {
         value: 'all',
         label: getUiCopy({
           surface: 'search-filter-all-label',
-          count: resourceState.discussionTotal.value + resourceState.postTotal.value + resourceState.userTotal.value,
+          count: totalCount,
         })?.text || '全部',
         count: getSearchUiCopy(
           'search-results-total-count',
-          { count: resourceState.discussionTotal.value + resourceState.postTotal.value + resourceState.userTotal.value },
-          String(resourceState.discussionTotal.value + resourceState.postTotal.value + resourceState.userTotal.value)
+          { count: totalCount },
+          String(totalCount)
         )
       },
       ...searchSources.map(item => ({
@@ -129,6 +128,7 @@ export function useSearchResultsPage({ route, router }) {
       discussionTotal: resourceState.discussionTotal.value,
       postTotal: resourceState.postTotal.value,
       userTotal: resourceState.userTotal.value,
+      sourceTotals: resourceState.sourceTotals.value,
       activeLabel: activeSource.value?.label || '结果',
     })
     if (uiCopy?.text) {
@@ -140,7 +140,7 @@ export function useSearchResultsPage({ route, router }) {
     }
 
     if (searchType.value === 'all') {
-      return `共找到 ${resourceState.discussionTotal.value + resourceState.postTotal.value + resourceState.userTotal.value} 条结果，已按讨论、帖子和用户分组展示。`
+      return `共找到 ${resourceState.total.value} 条结果，已按分类分组展示。`
     }
 
     const label = activeSource.value?.label || '结果'
@@ -222,6 +222,8 @@ export function useSearchResultsPage({ route, router }) {
     showPosts: computed(() => searchType.value === 'all' || searchType.value === 'posts'),
     showUsers: computed(() => searchType.value === 'all' || searchType.value === 'users'),
     searchSourceSections,
+    searchSources,
+    sourceTotals: resourceState.sourceTotals,
     syntaxItems,
     total: resourceState.total,
     totalPages: resourceState.totalPages,

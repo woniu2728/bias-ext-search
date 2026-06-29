@@ -11,6 +11,28 @@ function unwrapList(payload) {
   return []
 }
 
+function sourceKey(source = {}) {
+  return source.routeType || source.type
+}
+
+function sourceApiType(source = {}) {
+  return source.apiType || source.type || sourceKey(source)
+}
+
+function sourceResourceType(source = {}) {
+  return source.resourceType || source.storeType || sourceKey(source)
+}
+
+function sourceResultsKey(source = {}) {
+  return source.resultsKey || sourceKey(source)
+}
+
+function sourceTotalKey(source = {}) {
+  if (source.totalKey) return source.totalKey
+  const apiType = sourceApiType(source)
+  return `${apiType.endsWith('s') ? apiType.slice(0, -1) : apiType}_total`
+}
+
 export function createSearchResultsResourceState({
   resourceStore,
   searchSources,
@@ -22,12 +44,23 @@ export function createSearchResultsResourceState({
   const discussionIds = ref([])
   const postIds = ref([])
   const userIds = ref([])
+  const sourceIds = ref({})
+  const sourceTotals = ref({})
 
   const discussions = computed(() => resourceStore.list('discussions', discussionIds.value))
   const posts = computed(() => resourceStore.list('posts', postIds.value))
   const users = computed(() => resourceStore.list('users', userIds.value))
+  const sourceItems = computed(() => Object.fromEntries(
+    searchSources.map(source => {
+      const key = sourceKey(source)
+      return [key, resourceStore.list(sourceResourceType(source), sourceIds.value[key] || [])]
+    })
+  ))
   const totalPages = computed(() => Math.max(1, Math.ceil(total.value / 20)))
-  const isEmpty = computed(() => !discussions.value.length && !posts.value.length && !users.value.length)
+  const isEmpty = computed(() => searchSources.every(source => {
+    const key = sourceKey(source)
+    return !(sourceItems.value[key] || []).length
+  }))
   const trackedDiscussionIds = computed(() => [
     ...getTrackedDiscussionIdsFromDiscussionItems(discussions.value),
     ...getTrackedDiscussionIdsFromPostItems(posts.value),
@@ -35,15 +68,25 @@ export function createSearchResultsResourceState({
 
   function applySearchResponse(data = {}) {
     total.value = data.total || 0
-    discussionTotal.value = data.discussion_total ?? unwrapList(data.discussions || []).length
-    postTotal.value = data.post_total ?? unwrapList(data.posts || []).length
-    userTotal.value = data.user_total ?? unwrapList(data.users || []).length
-    discussionIds.value = resourceStore.upsertMany('discussions', unwrapList(data.discussions || []))
-      .map(item => item.id)
-    postIds.value = resourceStore.upsertMany('posts', unwrapList(data.posts || []))
-      .map(item => item.id)
-    userIds.value = resourceStore.upsertMany('users', unwrapList(data.users || []))
-      .map(item => item.id)
+    const nextSourceIds = {}
+    const nextSourceTotals = {}
+
+    for (const source of searchSources) {
+      const key = sourceKey(source)
+      const items = unwrapList(data[sourceResultsKey(source)] || [])
+      nextSourceTotals[key] = data[sourceTotalKey(source)] ?? items.length
+      nextSourceIds[key] = resourceStore.upsertMany(sourceResourceType(source), items)
+        .map(item => item.id)
+    }
+
+    sourceIds.value = nextSourceIds
+    sourceTotals.value = nextSourceTotals
+    discussionTotal.value = sourceTotals.value.discussions ?? data.discussion_total ?? unwrapList(data.discussions || []).length
+    postTotal.value = sourceTotals.value.posts ?? data.post_total ?? unwrapList(data.posts || []).length
+    userTotal.value = sourceTotals.value.users ?? data.user_total ?? unwrapList(data.users || []).length
+    discussionIds.value = sourceIds.value.discussions || []
+    postIds.value = sourceIds.value.posts || []
+    userIds.value = sourceIds.value.users || []
   }
 
   function resetResults() {
@@ -54,34 +97,25 @@ export function createSearchResultsResourceState({
     discussionIds.value = []
     postIds.value = []
     userIds.value = []
+    sourceIds.value = {}
+    sourceTotals.value = {}
   }
 
   function buildSearchSourceSections({ normalizedQuery, searchType }) {
-    const sourceItems = {
-      discussions: discussions.value,
-      posts: posts.value,
-      users: users.value,
-    }
-    const sourceTotals = {
-      discussions: discussionTotal.value,
-      posts: postTotal.value,
-      users: userTotal.value,
-    }
-
     return searchSources.map(source => {
-      const sourceKey = source.routeType || source.type
-      const items = sourceItems[sourceKey] || []
-      const totalForSource = Number(sourceTotals[sourceKey] || 0)
+      const key = sourceKey(source)
+      const items = sourceItems.value[key] || []
+      const totalForSource = Number(sourceTotals.value[key] || 0)
       const resultItems = typeof source.buildResultItems === 'function'
         ? source.buildResultItems(items, { query: normalizedQuery })
         : []
 
       return {
         ...source,
-        key: sourceKey,
+        key,
         resultItems,
         showMore: searchType === 'all' && totalForSource > items.length,
-        visible: searchType === 'all' || searchType === sourceKey,
+        visible: searchType === 'all' || searchType === key,
       }
     })
   }
@@ -97,6 +131,9 @@ export function createSearchResultsResourceState({
     postTotal,
     posts,
     resetResults,
+    sourceIds,
+    sourceItems,
+    sourceTotals,
     total,
     totalPages,
     trackedDiscussionIds,

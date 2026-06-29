@@ -6,6 +6,7 @@ function createResourceStore() {
   const buckets = {
     discussions: {},
     posts: {},
+    tags: {},
     users: {},
   }
 
@@ -26,7 +27,11 @@ function createResourceStore() {
 test('search results resource state stores totals and resolves tracked discussion ids from results', () => {
   const state = createSearchResultsResourceState({
     resourceStore: createResourceStore(),
-    searchSources: [],
+    searchSources: [
+      { type: 'discussions' },
+      { type: 'posts' },
+      { type: 'users' },
+    ],
   })
 
   state.applySearchResponse({
@@ -70,6 +75,20 @@ test('search results resource state builds visible grouped sections from registe
           }))
         },
       },
+      {
+        routeType: 'tag',
+        type: 'tag',
+        resourceType: 'tags',
+        resultsKey: 'tags',
+        totalKey: 'tag_total',
+        label: '标签',
+        buildResultItems(items) {
+          return items.map(item => ({
+            key: `tag-${item.id}`,
+            titleHtml: item.name,
+          }))
+        },
+      },
     ],
   })
 
@@ -77,6 +96,8 @@ test('search results resource state builds visible grouped sections from registe
     discussion_total: 3,
     discussions: [{ id: 12, title: 'Discussion A' }],
     users: [{ id: 5, username: 'alice' }],
+    tag_total: 2,
+    tags: [{ id: 7, name: 'Support' }],
   })
 
   assert.deepEqual(state.buildSearchSourceSections({
@@ -108,13 +129,58 @@ test('search results resource state builds visible grouped sections from registe
       showMore: false,
       visible: true,
     },
+    {
+      routeType: 'tag',
+      type: 'tag',
+      resourceType: 'tags',
+      resultsKey: 'tags',
+      totalKey: 'tag_total',
+      label: '标签',
+      buildResultItems: state.buildSearchSourceSections({
+        normalizedQuery: 'bias',
+        searchType: 'all',
+      })[2].buildResultItems,
+      key: 'tag',
+      resultItems: [{ key: 'tag-7', titleHtml: 'Support' }],
+      showMore: true,
+      visible: true,
+    },
   ])
+})
+
+test('search results resource state stores extension source totals and ids', () => {
+  const state = createSearchResultsResourceState({
+    resourceStore: createResourceStore(),
+    searchSources: [
+      {
+        routeType: 'tag',
+        type: 'tag',
+        resourceType: 'tags',
+        resultsKey: 'tags',
+        totalKey: 'tag_total',
+        label: '标签',
+      },
+    ],
+  })
+
+  state.applySearchResponse({
+    total: 4,
+    tag_total: 4,
+    tags: [{ id: 9, name: 'Support' }],
+  })
+
+  assert.equal(state.sourceTotals.value.tag, 4)
+  assert.deepEqual(state.sourceIds.value.tag, [9])
+  assert.deepEqual(state.sourceItems.value.tag.map(item => item.name), ['Support'])
+  assert.equal(state.isEmpty.value, false)
 })
 
 test('search results resource state resets totals and ids', () => {
   const state = createSearchResultsResourceState({
     resourceStore: createResourceStore(),
-    searchSources: [],
+    searchSources: [
+      { type: 'discussions' },
+    ],
   })
 
   state.applySearchResponse({

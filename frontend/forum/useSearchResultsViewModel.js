@@ -44,33 +44,20 @@ export function useSearchResultsViewModel({
   })
 
   const searchStatsItems = computed(() => [
-    {
-      key: 'discussions',
-      label: getUiCopy({
-        surface: 'search-page-stats-label',
-        itemKey: 'discussions',
-        count: pageState.discussionTotal.value,
-      })?.text || '讨论',
-      count: pageState.discussionTotal.value,
-    },
-    {
-      key: 'posts',
-      label: getUiCopy({
-        surface: 'search-page-stats-label',
-        itemKey: 'posts',
-        count: pageState.postTotal.value,
-      })?.text || '帖子',
-      count: pageState.postTotal.value,
-    },
-    {
-      key: 'users',
-      label: getUiCopy({
-        surface: 'search-page-stats-label',
-        itemKey: 'users',
-        count: pageState.userTotal.value,
-      })?.text || '用户',
-      count: pageState.userTotal.value,
-    },
+    ...pageState.searchSources.map(source => {
+      const key = source.routeType || source.type
+      const count = Number(pageState.sourceTotals.value?.[key] || 0)
+      return {
+        key,
+        label: getUiCopy({
+          surface: 'search-page-stats-label',
+          itemKey: key,
+          source,
+          count,
+        })?.text || source.label,
+        count,
+      }
+    }),
   ])
 
   watch(
@@ -80,6 +67,7 @@ export function useSearchResultsViewModel({
       pageState.discussionTotal.value,
       pageState.postTotal.value,
       pageState.userTotal.value,
+      JSON.stringify(pageState.sourceTotals.value || {}),
     ],
     () => {
       const query = pageState.normalizedQuery.value

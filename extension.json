@@ -8,7 +8,10 @@
   ],
   "dependencies": [
     "core",
-    "users",
+    "content",
+    "users"
+  ],
+  "optional_dependencies": [
     "discussions",
     "posts",
     "tags"

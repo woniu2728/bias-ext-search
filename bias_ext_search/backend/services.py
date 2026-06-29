@@ -1,13 +1,13 @@
 """搜索扩展业务逻辑层。"""
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
 from django.db import connection
 from django.db.models import OuterRef, Q, Subquery
 
-from bias_core.extensions.forum import get_forum_registry
+from bias_core.extensions.platform import get_forum_registry
 from bias_core.extensions.platform import PaginationService
 
 try:
@@ -39,10 +39,20 @@ def _get_search_target(target: str) -> dict[str, Any]:
     except Exception:
         provider = None
     if callable(provider):
-        provider = provider()
+        try:
+            provider = provider()
+        except Exception:
+            provider = None
     if isinstance(provider, dict):
         return provider
     raise RuntimeError(f"搜索目标未注册: search.target.{normalized}")
+
+
+def _get_optional_search_target(target: str) -> dict[str, Any] | None:
+    try:
+        return _get_search_target(target)
+    except RuntimeError:
+        return None
 
 
 def _get_search_target_model(target: str):
@@ -65,17 +75,35 @@ def _apply_search_target_visibility(target: str, queryset, *, user=None):
 
 
 @dataclass
+class SearchCriteria:
+    user: Any = None
+    filters: dict[str, Any] | None = None
+    limit: int | None = None
+    offset: int = 0
+    sort: str = ""
+    default_sort: bool = False
+    query: str = ""
+    resource: str = ""
+
+    @property
+    def is_fulltext(self) -> bool:
+        return bool((self.filters or {}).get("q") or self.query)
+
+
+@dataclass
 class SearchContext:
-    discussion_queryset: object
-    post_queryset: object
+    discussion_queryset: object | None
+    post_queryset: object | None
     user_queryset: object | None
     discussion_total: int
     post_total: int
     user_total: int
+    extra_querysets: dict[str, object] = field(default_factory=dict)
+    extra_totals: dict[str, int] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
-        return self.discussion_total + self.post_total + self.user_total
+        return self.discussion_total + self.post_total + self.user_total + sum(self.extra_totals.values())
 
 
 def _get_runtime_search_filters(targets: tuple[str, ...] | None = None):
@@ -212,22 +240,25 @@ class SearchService:
         text_query, parsed_filters = SearchService.extract_filter_tokens(query, targets=("discussion",))
 
         if text_query:
+            title_match_q = SearchService.build_text_query(['title', 'slug'], text_query)
             if SearchService.should_use_postgres_full_text(text_query):
                 queryset = SearchService._apply_postgres_discussion_search(queryset, text_query, user=user)
-            else:
+            elif SearchService.has_search_target("post"):
                 searchable_post_types = _get_searchable_post_type_codes()
                 post_model = _get_search_target_model("post")
-                title_match_q = SearchService.build_text_query(['title', 'slug'], text_query)
-                visible_post_discussion_ids = _apply_search_target_visibility(
-                    "post",
-                    post_model.objects.filter(type__in=searchable_post_types).filter(
-                        SearchService.build_text_query(["content"], text_query),
-                    ),
+                matching_posts = SearchService._matching_discussion_posts_queryset(
+                    post_model,
+                    text_query,
+                    searchable_post_types,
                     user=user,
-                ).values("discussion_id")
-                queryset = queryset.filter(
-                    title_match_q | Q(id__in=Subquery(visible_post_discussion_ids))
                 )
+                queryset = queryset.filter(
+                    title_match_q | Q(id__in=Subquery(matching_posts.values("discussion_id")))
+                ).annotate(
+                    most_relevant_post_id=Subquery(matching_posts.values("id")[:1])
+                )
+            else:
+                queryset = queryset.filter(title_match_q)
 
         context = {
             **dict(filter_context or {}),
@@ -342,14 +373,21 @@ class SearchService:
         discussion_queryset = SearchService._discussion_queryset(query, user=user, filter_context=filter_context)
         post_queryset = SearchService._post_queryset(query, user=user, filter_context=filter_context)
         user_queryset = SearchService._user_queryset(query) if include_users else None
+        extra_querysets = SearchService._extra_querysets(query, user=user, filter_context=filter_context)
+        extra_totals = {
+            target: queryset.count()
+            for target, queryset in extra_querysets.items()
+        }
 
         return SearchContext(
             discussion_queryset=discussion_queryset,
             post_queryset=post_queryset,
             user_queryset=user_queryset,
-            discussion_total=discussion_queryset.count(),
-            post_total=post_queryset.count(),
+            discussion_total=discussion_queryset.count() if discussion_queryset is not None else 0,
+            post_total=post_queryset.count() if post_queryset is not None else 0,
             user_total=user_queryset.count() if user_queryset is not None else 0,
+            extra_querysets=extra_querysets,
+            extra_totals=extra_totals,
         )
 
     @staticmethod
@@ -359,6 +397,10 @@ class SearchService:
             "discussion_total": context.discussion_total,
             "post_total": context.post_total,
             "user_total": context.user_total,
+            **{
+                f"{target}_total": total
+                for target, total in context.extra_totals.items()
+            },
             "total": context.total,
         }
 
@@ -382,18 +424,27 @@ class SearchService:
             query,
             page=1,
             limit=min(limit, 5),
-        )
+        ) if context.discussion_queryset is not None else []
         posts = SearchService._search_posts_queryset(
             context.post_queryset,
             query,
             page=1,
             limit=min(limit, 5),
-        )
+        ) if context.post_queryset is not None else []
         users = (
             SearchService._search_users_queryset(context.user_queryset, limit=min(limit, 5))
             if include_users and context.user_queryset is not None
             else []
         )
+        extra_results = {
+            target: SearchService._search_extra_queryset(
+                target,
+                queryset,
+                page=1,
+                limit=min(limit, 5),
+            )
+            for target, queryset in context.extra_querysets.items()
+        }
 
         return {
             'total': context.total,
@@ -406,6 +457,15 @@ class SearchService:
             'discussions': discussions,
             'posts': posts,
             'users': users,
+            'extra_results': extra_results,
+            **{
+                f"{target}_total": total
+                for target, total in context.extra_totals.items()
+            },
+            **{
+                SearchService._target_results_key(target): results
+                for target, results in extra_results.items()
+            },
         }
 
     @staticmethod
@@ -420,27 +480,40 @@ class SearchService:
         discussion_queryset = SearchService._discussion_queryset(query, user=user)
         post_queryset = SearchService._post_queryset(query, user=user)
         user_queryset = SearchService._user_queryset(query) if include_users else None
+        extra_querysets = SearchService._extra_querysets(query, user=user)
 
-        discussions = SearchService._search_discussions_queryset(
-            discussion_queryset,
-            query,
-            page=1,
-            limit=preview_limit,
+        discussions = (
+            SearchService._search_discussions_queryset(
+                discussion_queryset,
+                query,
+                page=1,
+                limit=preview_limit,
+            )
+            if discussion_queryset is not None
+            else []
         )
-        posts = SearchService._search_posts_queryset(
-            post_queryset,
-            query,
-            page=1,
-            limit=preview_limit,
+        posts = (
+            SearchService._search_posts_queryset(
+                post_queryset,
+                query,
+                page=1,
+                limit=preview_limit,
+            )
+            if post_queryset is not None
+            else []
         )
         users = (
             SearchService._search_users_queryset(user_queryset, limit=preview_limit)
             if include_users and user_queryset is not None
             else []
         )
+        extra_results = {
+            target: SearchService._search_extra_queryset(target, queryset, page=1, limit=preview_limit)
+            for target, queryset in extra_querysets.items()
+        }
 
         return {
-            'total': len(discussions) + len(posts) + len(users),
+            'total': len(discussions) + len(posts) + len(users) + sum(len(items) for items in extra_results.values()),
             'page': 1,
             'limit': preview_limit,
             'type': 'all',
@@ -450,6 +523,15 @@ class SearchService:
             'discussions': discussions,
             'posts': posts,
             'users': users,
+            'extra_results': extra_results,
+            **{
+                f"{target}_total": len(results)
+                for target, results in extra_results.items()
+            },
+            **{
+                SearchService._target_results_key(target): results
+                for target, results in extra_results.items()
+            },
             'is_preview': True,
         }
 
@@ -464,6 +546,8 @@ class SearchService:
     ) -> Tuple[List[Any], int]:
         context = context or SearchService.build_search_context(query, user=user, include_users=False)
         queryset = context.discussion_queryset
+        if queryset is None:
+            return [], 0
         if preload is not None:
             queryset = preload(queryset)
         discussions = SearchService._search_discussions_queryset(queryset, query, page, limit)
@@ -477,6 +561,8 @@ class SearchService:
         user=None,
     ) -> List[Any]:
         queryset = SearchService._discussion_queryset(query, user=user)
+        if queryset is None:
+            return []
         return SearchService._search_discussions_queryset(queryset, query, page, limit)
 
     @staticmethod
@@ -490,6 +576,8 @@ class SearchService:
     ) -> Tuple[List[Any], int]:
         context = context or SearchService.build_search_context(query, user=user, include_users=False)
         queryset = context.post_queryset
+        if queryset is None:
+            return [], 0
         if preload is not None:
             queryset = preload(queryset)
         posts = SearchService._search_posts_queryset(queryset, query, page, limit)
@@ -503,6 +591,8 @@ class SearchService:
         user=None,
     ) -> List[Any]:
         queryset = SearchService._post_queryset(query, user=user)
+        if queryset is None:
+            return []
         return SearchService._search_posts_queryset(queryset, query, page, limit)
 
     @staticmethod
@@ -515,6 +605,8 @@ class SearchService:
     ) -> Tuple[List[Any], int]:
         context = context or SearchService.build_search_context(query, include_users=True)
         queryset = context.user_queryset
+        if queryset is None:
+            return [], 0
         if preload is not None:
             queryset = preload(queryset)
         users = SearchService._search_users_queryset(queryset, page, limit)
@@ -527,10 +619,78 @@ class SearchService:
         limit: int = 20,
     ) -> List[Any]:
         queryset = SearchService._user_queryset(query)
+        if queryset is None:
+            return []
         return SearchService._search_users_queryset(queryset, page, limit)
 
     @staticmethod
+    def search_extra_target(
+        target: str,
+        query: str,
+        page: int = 1,
+        limit: int = 20,
+        user=None,
+        context: SearchContext | None = None,
+        preload=None,
+    ) -> Tuple[List[Any], int]:
+        normalized = str(target or "").strip()
+        if not normalized:
+            return [], 0
+        context = context or SearchService.build_search_context(query, user=user, include_users=False)
+        queryset = context.extra_querysets.get(normalized)
+        if queryset is None:
+            queryset = SearchService._extra_queryset(normalized, query, user=user)
+        if queryset is None:
+            return [], 0
+        total = context.extra_totals.get(normalized)
+        if total is None:
+            total = queryset.count()
+        if preload is not None:
+            queryset = preload(queryset)
+        return SearchService._search_extra_queryset(normalized, queryset, page, limit), total
+
+    @staticmethod
+    def get_extra_search_targets() -> list[str]:
+        try:
+            from bias_core.extensions.runtime import get_runtime_search_service
+
+            search_service = get_runtime_search_service()
+        except Exception:
+            return []
+        if search_service is None:
+            return []
+
+        targets = []
+        for driver in search_service.get_drivers():
+            target = str(getattr(driver, "target", "") or "").strip()
+            if not target or target in {"discussion", "post", "user"} or target in targets:
+                continue
+            if _get_optional_search_target(target) is not None:
+                targets.append(target)
+        return targets
+
+    @staticmethod
+    def get_extra_search_target_config(target: str) -> dict[str, Any]:
+        return _get_optional_search_target(target) or {}
+
+    @staticmethod
+    def has_search_target(target: str) -> bool:
+        provider = _get_optional_search_target(target)
+        return bool(provider and provider.get("model") is not None)
+
+    @staticmethod
+    def get_builtin_search_targets(*, include_users: bool = True) -> tuple[str, ...]:
+        candidates = ("discussion", "post", "user") if include_users else ("discussion", "post")
+        return tuple(target for target in candidates if SearchService.has_search_target(target))
+
+    @staticmethod
+    def get_extra_search_results_key(target: str) -> str:
+        return SearchService._target_results_key(target)
+
+    @staticmethod
     def _search_users_queryset(queryset, page: int = 1, limit: int = 20) -> List[Any]:
+        if queryset is None:
+            return []
         if SearchService._queryset_has_annotation(queryset, "search_rank"):
             queryset = queryset.order_by('-search_rank', '-discussion_count', '-comment_count')
         else:
@@ -545,7 +705,10 @@ class SearchService:
     def get_search_suggestions(query: str, limit: int = 5, user=None) -> List[str]:
         suggestions = []
         limit = SearchService.normalize_limit(limit)
-        discussions = SearchService._discussion_queryset(query, user=user).values_list('title', flat=True)[:limit]
+        discussion_queryset = SearchService._discussion_queryset(query, user=user)
+        if discussion_queryset is None:
+            return []
+        discussions = discussion_queryset.values_list('title', flat=True)[:limit]
         suggestions.extend(discussions)
         return suggestions[:limit]
 
@@ -566,6 +729,8 @@ class SearchService:
 
     @staticmethod
     def _discussion_queryset(query: str, user=None, filter_context: dict | None = None):
+        if not SearchService.has_search_target("discussion"):
+            return None
         discussion_model = _get_search_target_model("discussion")
         queryset = SearchService.apply_discussion_search(
             discussion_model.objects.all(),
@@ -577,6 +742,8 @@ class SearchService:
 
     @staticmethod
     def _post_queryset(query: str, user=None, filter_context: dict | None = None):
+        if not SearchService.has_search_target("post"):
+            return None
         searchable_post_types = _get_searchable_post_type_codes()
         post_model = _get_search_target_model("post")
         queryset = SearchService.apply_post_search(
@@ -589,18 +756,93 @@ class SearchService:
 
     @staticmethod
     def _user_queryset(query: str):
+        if not SearchService.has_search_target("user"):
+            return None
         user_model = _get_search_target_model("user")
         return SearchService.apply_user_search(user_model.objects.all(), query)
 
     @staticmethod
+    def _extra_querysets(query: str, user=None, filter_context: dict | None = None) -> dict[str, object]:
+        return {
+            target: queryset
+            for target in SearchService.get_extra_search_targets()
+            for queryset in (SearchService._extra_queryset(target, query, user=user, filter_context=filter_context),)
+            if queryset is not None
+        }
+
+    @staticmethod
+    def _extra_queryset(target: str, query: str, user=None, filter_context: dict | None = None):
+        provider = _get_optional_search_target(target)
+        if provider is None:
+            return None
+        model = provider.get("model")
+        if model is None:
+            return None
+        queryset = model.objects.all()
+        queryset = _apply_search_target_visibility(target, queryset, user=user)
+        context = {
+            **dict(filter_context or {}),
+            "user": user,
+            "query": query,
+            "text_query": query,
+            "target": target,
+        }
+
+        try:
+            from bias_core.extensions.runtime import get_runtime_search_service
+
+            search_service = get_runtime_search_service()
+        except Exception:
+            search_service = None
+
+        if search_service is not None:
+            criteria = SearchCriteria(
+                user=user,
+                filters={"q": query},
+                query=query,
+                resource=target,
+            )
+            result = search_service.query(model, queryset, criteria, context)
+            queryset = result.results
+        elif query:
+            queryset = queryset.none()
+
+        return queryset.distinct() if hasattr(queryset, "distinct") else queryset
+
+    @staticmethod
+    def _search_extra_queryset(target: str, queryset, page: int = 1, limit: int = 20) -> List[Any]:
+        provider = _get_optional_search_target(target) or {}
+        order_by = provider.get("order_by")
+        if callable(order_by):
+            queryset = order_by(queryset)
+        elif order_by:
+            queryset = queryset.order_by(*tuple(order_by))
+        else:
+            queryset = queryset.order_by("pk")
+
+        page = SearchService.normalize_page(page)
+        limit = SearchService.normalize_limit(limit)
+        offset = (page - 1) * limit
+        return list(queryset[offset:offset + limit])
+
+    @staticmethod
+    def _target_results_key(target: str) -> str:
+        custom = (_get_optional_search_target(target) or {}).get("results_key")
+        if custom:
+            return str(custom)
+        return f"{target}s"
+
+    @staticmethod
     def _search_discussions_queryset(queryset, query: str, page: int, limit: int) -> List[Any]:
-        first_post_model = _get_discussion_first_post_model()
-        first_post_content = first_post_model.objects.filter(
-            id=OuterRef("first_post_id"),
-        ).values("content")[:1]
-        queryset = queryset.select_related('user', 'last_posted_user').annotate(
-            first_post_content=Subquery(first_post_content)
-        )
+        queryset = queryset.select_related('user', 'last_posted_user')
+        if SearchService.has_search_target("post"):
+            first_post_model = _get_discussion_first_post_model()
+            first_post_content = first_post_model.objects.filter(
+                id=OuterRef("first_post_id"),
+            ).values("content")[:1]
+            queryset = queryset.annotate(
+                first_post_content=Subquery(first_post_content)
+            )
         if SearchService._queryset_has_annotation(queryset, "search_rank"):
             queryset = queryset.order_by('-is_sticky', '-search_rank', '-comment_count', '-view_count')
         else:
@@ -621,6 +863,8 @@ class SearchService:
 
     @staticmethod
     def _search_posts_queryset(queryset, query: str, page: int, limit: int) -> List[Any]:
+        if queryset is None:
+            return []
         queryset = queryset.select_related('user', 'discussion')
         if SearchService._queryset_has_annotation(queryset, "search_rank"):
             queryset = queryset.order_by('-search_rank', '-created_at')
@@ -661,31 +905,58 @@ class SearchService:
             SearchVector('title', weight='A', config=POSTGRES_FULL_TEXT_CONFIG)
             + SearchVector('slug', weight='B', config=POSTGRES_FULL_TEXT_CONFIG)
         )
-        searchable_post_types = _get_searchable_post_type_codes()
-        post_model = _get_search_target_model("post")
-        visible_post_discussion_ids = SearchService.apply_post_search(
-            post_model.objects.filter(type__in=searchable_post_types),
-            query,
-            user=user,
-        )
-        visible_post_discussion_ids = _apply_search_target_visibility(
-            "post",
-            visible_post_discussion_ids,
-            user=user,
-        ).values("discussion_id")
-
-        return queryset.annotate(
+        queryset = queryset.annotate(
             title_search_vector=title_vector,
             search_rank=SearchRank(title_vector, search_query),
-        ).filter(
-            Q(title_search_vector=search_query) | Q(id__in=Subquery(visible_post_discussion_ids))
         )
+        search_filter = Q(title_search_vector=search_query)
+        if SearchService.has_search_target("post"):
+            searchable_post_types = _get_searchable_post_type_codes()
+            post_model = _get_search_target_model("post")
+            matching_posts = SearchService._matching_discussion_posts_queryset(
+                post_model,
+                query,
+                searchable_post_types,
+                postgres=True,
+                user=user,
+            )
+            search_filter |= Q(id__in=Subquery(matching_posts.values("discussion_id")))
+            queryset = queryset.annotate(
+                most_relevant_post_id=Subquery(matching_posts.values("id")[:1])
+            )
+
+        return queryset.filter(search_filter)
 
     @staticmethod
     def _postgres_search_query(query: str) -> SearchQuery:
         return SearchQuery(query, config=POSTGRES_FULL_TEXT_CONFIG, search_type="plain")
 
     @staticmethod
+    def _matching_discussion_posts_queryset(
+        post_model,
+        query: str,
+        searchable_post_types,
+        *,
+        postgres: bool = False,
+        user=None,
+    ):
+        queryset = post_model.objects.filter(
+            discussion_id=OuterRef("pk"),
+            type__in=searchable_post_types,
+        )
+        if postgres:
+            search_query = SearchService._postgres_search_query(query)
+            search_vector = SearchVector("content", config=POSTGRES_FULL_TEXT_CONFIG)
+            queryset = queryset.annotate(
+                post_search_vector=search_vector,
+                post_search_rank=SearchRank(search_vector, search_query),
+            ).filter(post_search_vector=search_query).order_by("-post_search_rank", "number")
+        else:
+            queryset = queryset.filter(
+                SearchService.build_text_query(["content"], query),
+            ).order_by("number")
+        return _apply_search_target_visibility("post", queryset, user=user)
+
+    @staticmethod
     def _queryset_has_annotation(queryset, name: str) -> bool:
         return name in getattr(getattr(queryset, "query", None), "annotations", {})
-

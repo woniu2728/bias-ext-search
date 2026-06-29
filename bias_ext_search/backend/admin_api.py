@@ -7,9 +7,9 @@ from bias_core.extensions.platform import QueueService
 from bias_core.extensions.platform import api_error
 from bias_core.extensions.platform import log_admin_action
 from bias_core.extensions.platform import require_staff
-from bias_core.extensions.forum import AuditLog
-from bias_core.extensions.forum import detect_database_label
-from bias_core.extensions.forum import SearchIndexService
+from bias_core.extensions.platform import AuditLog
+from bias_core.extensions.platform import detect_database_label
+from bias_core.extensions.platform import SearchIndexService
 
 
 router = Router()

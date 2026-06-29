@@ -232,11 +232,11 @@ const resourceStore = useResourceStore()
 const forumStore = useForumStore()
 const forumRealtimeStore = useForumRealtimeStore()
 const searchSources = getSearchSources({ forumStore })
-const searchSourceMap = Object.fromEntries(searchSources.map(item => [item.type, item]))
+const searchSourceMap = Object.fromEntries(searchSources.map(item => [sourceKey(item), item]))
 const root = ref(null)
 const inputRef = ref(null)
 const query = ref(String(props.initialQuery || ''))
-const allowedTypes = ['all', ...searchSources.map(item => item.type)]
+const allowedTypes = ['all', ...searchSources.map(item => sourceKey(item))]
 const activeType = ref(allowedTypes.includes(props.initialType) ? props.initialType : 'all')
 const searchFilterTarget = computed(() => {
   if (activeType.value === 'all') return 'all'
@@ -247,13 +247,10 @@ const loading = ref(false)
 const discussionIds = ref([])
 const postIds = ref([])
 const userIds = ref([])
+const sourceIds = ref({})
 const extensionEmptyPanelSections = ref([])
 const recentSearches = ref(loadRecentSearches())
-const totals = ref({
-  discussions: 0,
-  posts: 0,
-  users: 0,
-})
+const totals = ref({})
 const activeResultIndex = ref(-1)
 let searchTimer = null
 let requestId = 0
@@ -261,6 +258,10 @@ let emptyPanelRequestId = 0
 
 const normalizedQuery = computed(() => query.value.trim())
 const searchResults = computed(() => ({
+  ...Object.fromEntries(searchSources.map(source => {
+    const key = sourceKey(source)
+    return [key, resourceStore.list(sourceResourceType(source), sourceIds.value[key] || [])]
+  })),
   discussions: resourceStore.list('discussions', discussionIds.value),
   posts: resourceStore.list('posts', postIds.value),
   users: resourceStore.list('users', userIds.value),
@@ -270,11 +271,11 @@ const trackedDiscussionIds = computed(() => [
   ...getTrackedDiscussionIdsFromPostItems(searchResults.value.posts),
 ])
 const tabs = computed(() => [
-  { value: 'all', label: '全部', count: totals.value.discussions + totals.value.posts + totals.value.users },
+  { value: 'all', label: '全部', count: searchSources.reduce((sum, item) => sum + Number(totals.value[sourceKey(item)] || 0), 0) },
   ...searchSources.map(item => ({
-    value: item.type,
+    value: sourceKey(item),
     label: item.label,
-    count: Number(totals.value[item.type] || 0),
+    count: Number(totals.value[sourceKey(item)] || 0),
   })),
 ])
 const activeTabLabel = computed(() => tabs.value.find(tab => tab.value === activeType.value)?.label || '全部')
@@ -295,22 +296,16 @@ const sectionLinkText = computed(() => getUiCopy({
   surface: 'search-modal-section-link',
 })?.text || '只看{label}')
 const modalSourceSections = computed(() => {
-  const sourceItems = {
-    discussions: searchResults.value.discussions,
-    posts: searchResults.value.posts,
-    users: searchResults.value.users,
-  }
-
   return searchSources.map(source => {
-    const sourceKey = source.type
-    const items = sourceItems[sourceKey] || []
+    const key = sourceKey(source)
+    const items = searchResults.value[key] || []
     const resultItems = typeof source.buildResultItems === 'function'
       ? source.buildResultItems(items, { query: normalizedQuery.value })
       : []
 
     return {
       ...source,
-      key: sourceKey,
+      key,
       items: resultItems,
     }
   })
@@ -490,7 +485,8 @@ watch(
       discussionIds.value = []
       postIds.value = []
       userIds.value = []
-      totals.value = { discussions: 0, posts: 0, users: 0 }
+      sourceIds.value = {}
+      totals.value = {}
       loadExtensionEmptyPanelSections()
       return
     }
@@ -561,17 +557,19 @@ async function fetchResults() {
 
     if (currentRequestId !== requestId) return
 
-    totals.value = {
-      discussions: data.discussion_total ?? unwrapList(data.discussions || []).length,
-      posts: data.post_total ?? unwrapList(data.posts || []).length,
-      users: data.user_total ?? unwrapList(data.users || []).length,
+    const nextTotals = {}
+    const nextSourceIds = {}
+    for (const source of searchSources) {
+      const key = sourceKey(source)
+      const items = unwrapList(data[sourceResultsKey(source)] || [])
+      nextTotals[key] = data[sourceTotalKey(source)] ?? items.length
+      nextSourceIds[key] = resourceStore.upsertMany(sourceResourceType(source), items).map(item => item.id)
     }
-    discussionIds.value = resourceStore.upsertMany('discussions', unwrapList(data.discussions || []))
-      .map(item => item.id)
-    postIds.value = resourceStore.upsertMany('posts', unwrapList(data.posts || []))
-      .map(item => item.id)
-    userIds.value = resourceStore.upsertMany('users', unwrapList(data.users || []))
-      .map(item => item.id)
+    totals.value = nextTotals
+    sourceIds.value = nextSourceIds
+    discussionIds.value = sourceIds.value.discussions || []
+    postIds.value = sourceIds.value.posts || []
+    userIds.value = sourceIds.value.users || []
   } catch (error) {
     if (currentRequestId !== requestId) return
 
@@ -579,12 +577,35 @@ async function fetchResults() {
     discussionIds.value = []
     postIds.value = []
     userIds.value = []
-    totals.value = { discussions: 0, posts: 0, users: 0 }
+    sourceIds.value = {}
+    totals.value = {}
   } finally {
     if (currentRequestId === requestId) {
       loading.value = false
     }
   }
+}
+
+function sourceKey(source = {}) {
+  return source.routeType || source.type
+}
+
+function sourceApiType(source = {}) {
+  return source.apiType || source.type || sourceKey(source)
+}
+
+function sourceResourceType(source = {}) {
+  return source.resourceType || source.storeType || sourceKey(source)
+}
+
+function sourceResultsKey(source = {}) {
+  return source.resultsKey || sourceKey(source)
+}
+
+function sourceTotalKey(source = {}) {
+  if (source.totalKey) return source.totalKey
+  const apiType = sourceApiType(source)
+  return `${apiType.endsWith('s') ? apiType.slice(0, -1) : apiType}_total`
 }
 
 async function handleForumEvent(event) {
