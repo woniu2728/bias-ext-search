@@ -5,7 +5,6 @@ from ninja import Router
 
 from bias_core.extensions.platform import api_error
 from bias_core.extensions.platform import get_optional_user
-from bias_core.extensions.runtime import get_runtime_resource_registry
 from bias_core.extensions.platform import has_forum_permission
 from bias_core.extensions.platform import ResourceQueryOptions, apply_resource_preloads, parse_resource_query_options
 from bias_ext_search.backend.schemas import SearchFilterCatalogSchema, SearchSuggestionSchema
@@ -13,6 +12,12 @@ from bias_ext_search.backend.services import SearchService
 
 
 router = Router()
+
+
+def get_runtime_resource_registry(*args, **kwargs):
+    from bias_core.extensions.runtime import get_runtime_resource_registry as runtime_get_resource_registry
+
+    return runtime_get_resource_registry(*args, **kwargs)
 
 
 def _get_resource_registry():

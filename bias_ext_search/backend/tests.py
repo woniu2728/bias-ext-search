@@ -19,22 +19,49 @@ from bias_core.extensions.testing import (
     get_forum_registry,
     get_search_index_definitions,
 )
-from bias_core.extensions.runtime import (
-    create_runtime_discussion,
-    get_runtime_discussion_model,
-    get_runtime_discussion_state_model,
-    list_runtime_discussions,
-)
-from bias_core.extensions.runtime import (
-    create_runtime_post,
-    get_runtime_post_model,
-)
 from bias_ext_search.backend.services import SearchService
-from bias_core.extensions.runtime import (
-    get_runtime_group_model,
-    get_runtime_permission_model,
-    get_runtime_user_model,
-)
+
+
+def _runtime_facade(name: str):
+    from importlib import import_module
+
+    return getattr(import_module("bias_core.extensions.runtime"), name)
+
+
+def create_runtime_discussion(*args, **kwargs):
+    return _runtime_facade("create_runtime_discussion")(*args, **kwargs)
+
+
+def create_runtime_post(*args, **kwargs):
+    return _runtime_facade("create_runtime_post")(*args, **kwargs)
+
+
+def get_runtime_discussion_model(*args, **kwargs):
+    return _runtime_facade("get_runtime_discussion_model")(*args, **kwargs)
+
+
+def get_runtime_discussion_state_model(*args, **kwargs):
+    return _runtime_facade("get_runtime_discussion_state_model")(*args, **kwargs)
+
+
+def get_runtime_group_model(*args, **kwargs):
+    return _runtime_facade("get_runtime_group_model")(*args, **kwargs)
+
+
+def get_runtime_permission_model(*args, **kwargs):
+    return _runtime_facade("get_runtime_permission_model")(*args, **kwargs)
+
+
+def get_runtime_post_model(*args, **kwargs):
+    return _runtime_facade("get_runtime_post_model")(*args, **kwargs)
+
+
+def get_runtime_user_model(*args, **kwargs):
+    return _runtime_facade("get_runtime_user_model")(*args, **kwargs)
+
+
+def list_runtime_discussions(*args, **kwargs):
+    return _runtime_facade("list_runtime_discussions")(*args, **kwargs)
 
 
 class RuntimeModelProxy:
