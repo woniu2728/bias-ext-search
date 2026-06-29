@@ -144,9 +144,8 @@ def search(
         _serialize_extra_search_sections(response_payload, result, extra_resource_options)
         return JsonResponse(response_payload)
 
-    context = SearchService.build_search_context(query, user=user, include_users=can_search_users)
-
     if type == "all":
+        context = SearchService.build_search_context(query, user=user, include_users=can_search_users)
         result = SearchService.search_all(
             query,
             page,
@@ -177,6 +176,12 @@ def search(
         if not SearchService.has_search_target("discussion"):
             return api_error("搜索目标不可用", status=400)
 
+        context = SearchService.build_search_context(
+            query,
+            user=user,
+            include_users=False,
+            targets=("discussion",),
+        )
         discussions, total = SearchService.search_discussions(
             query,
             page,
@@ -213,6 +218,12 @@ def search(
         if not SearchService.has_search_target("post"):
             return api_error("搜索目标不可用", status=400)
 
+        context = SearchService.build_search_context(
+            query,
+            user=user,
+            include_users=False,
+            targets=("post",),
+        )
         posts, total = SearchService.search_posts(
             query,
             page,
@@ -252,6 +263,12 @@ def search(
         if not can_search_users:
             return api_error("没有权限搜索用户", status=403)
 
+        context = SearchService.build_search_context(
+            query,
+            user=user,
+            include_users=True,
+            targets=("user",),
+        )
         users, total = SearchService.search_users(
             query,
             page,
@@ -279,6 +296,12 @@ def search(
         })
 
     if type in extra_targets:
+        context = SearchService.build_search_context(
+            query,
+            user=user,
+            include_users=can_search_users,
+            targets=("extra",),
+        )
         items, total = SearchService.search_extra_target(
             type,
             query,

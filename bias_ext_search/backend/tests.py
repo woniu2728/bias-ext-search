@@ -575,6 +575,110 @@ class SearchApiTests(ChineseSearchTests):
         ]
         self.assertLessEqual(len(select_group_queries), 2)
 
+    def test_search_api_users_type_has_bounded_query_budget(self):
+        keyword = "用户搜索性能预算"
+        for index in range(8):
+            candidate = User.objects.create_user(
+                username=f"search-query-budget-user-{index}",
+                email=f"search-query-budget-user-{index}@example.com",
+                password="password123",
+                bio=keyword,
+                is_email_confirmed=True,
+            )
+            group = Group.objects.create(name=f"SearchBudgetGroup{index}", color="#16a085")
+            candidate.user_groups.add(group)
+
+        with CaptureQueriesContext(connection) as context:
+            response = self.client.get(
+                "/api/search",
+                {"q": keyword, "type": "users", "limit": 8},
+                **self.auth_header(),
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["user_total"], 8)
+        self.assertEqual(len(payload["users"]), 8)
+        self.assertTrue(all(item["primary_group"] for item in payload["users"]))
+        self.assertLessEqual(len(context.captured_queries), 10)
+        self.assertLessEqual(
+            sum(1 for query in context.captured_queries if "user_groups" in query["sql"].lower()),
+            2,
+        )
+
+    def test_search_api_discussions_type_has_bounded_query_budget(self):
+        keyword = "讨论搜索性能预算"
+        for index in range(8):
+            create_runtime_discussion(
+                title=f"{keyword} {index}",
+                content=f"首帖内容 {index}",
+                user=self.user,
+            )
+
+        with CaptureQueriesContext(connection) as context:
+            response = self.client.get(
+                "/api/search",
+                {"q": keyword, "type": "discussions", "limit": 8, "include": "user"},
+                **self.auth_header(),
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["discussion_total"], 8)
+        self.assertEqual(len(payload["discussions"]), 8)
+        self.assertTrue(all(item["user"]["username"] == self.user.username for item in payload["discussions"]))
+        self.assertLessEqual(
+            len(context.captured_queries),
+            12,
+            "\n".join(query["sql"] for query in context.captured_queries),
+        )
+        self.assertFalse(
+            any(
+                re.search(r'\bfrom\s+"?bias_ext_users_user"?\b', query["sql"], flags=re.IGNORECASE)
+                and "join" not in query["sql"].lower()
+                for query in context.captured_queries
+            )
+        )
+
+    def test_search_api_posts_type_has_bounded_query_budget(self):
+        keyword = "帖子搜索性能预算"
+        discussion = create_runtime_discussion(
+            title="帖子搜索预算讨论",
+            content="首帖内容",
+            user=self.user,
+        )
+        for index in range(8):
+            create_runtime_post(
+                discussion_id=discussion.id,
+                content=f"{keyword} {index}",
+                user=self.user,
+            )
+
+        with CaptureQueriesContext(connection) as context:
+            response = self.client.get(
+                "/api/search",
+                {"q": keyword, "type": "posts", "limit": 8, "include": "user"},
+                **self.auth_header(),
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["post_total"], 8)
+        self.assertEqual(len(payload["posts"]), 8)
+        self.assertTrue(all(item["user"]["username"] == self.user.username for item in payload["posts"]))
+        self.assertLessEqual(
+            len(context.captured_queries),
+            12,
+            "\n".join(query["sql"] for query in context.captured_queries),
+        )
+        self.assertFalse(
+            any(
+                re.search(r'\bfrom\s+"?bias_content_discussion"?\b', query["sql"], flags=re.IGNORECASE)
+                and "join" not in query["sql"].lower()
+                for query in context.captured_queries
+            )
+        )
+
     def test_search_api_users_type_requires_search_permission(self):
         restricted_user = User.objects.create_user(
             username="search-no-user-permission",

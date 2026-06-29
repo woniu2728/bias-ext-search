@@ -368,12 +368,34 @@ class SearchService:
             return queryset
 
     @staticmethod
-    def build_search_context(query: str, user=None, include_users: bool = True) -> SearchContext:
+    def build_search_context(
+        query: str,
+        user=None,
+        include_users: bool = True,
+        targets: tuple[str, ...] | None = None,
+    ) -> SearchContext:
+        target_set = set(targets or ("discussion", "post", "user", "extra"))
+        include_discussions = "discussion" in target_set
+        include_posts = "post" in target_set
+        include_user_target = include_users and "user" in target_set
+        include_extra_targets = "extra" in target_set
         filter_context = {"user": user, "query": query, "_tag_slug_ids_cache": {}}
-        discussion_queryset = SearchService._discussion_queryset(query, user=user, filter_context=filter_context)
-        post_queryset = SearchService._post_queryset(query, user=user, filter_context=filter_context)
-        user_queryset = SearchService._user_queryset(query) if include_users else None
-        extra_querysets = SearchService._extra_querysets(query, user=user, filter_context=filter_context)
+        discussion_queryset = (
+            SearchService._discussion_queryset(query, user=user, filter_context=filter_context)
+            if include_discussions
+            else None
+        )
+        post_queryset = (
+            SearchService._post_queryset(query, user=user, filter_context=filter_context)
+            if include_posts
+            else None
+        )
+        user_queryset = SearchService._user_queryset(query) if include_user_target else None
+        extra_querysets = (
+            SearchService._extra_querysets(query, user=user, filter_context=filter_context)
+            if include_extra_targets
+            else {}
+        )
         extra_totals = {
             target: queryset.count()
             for target, queryset in extra_querysets.items()
