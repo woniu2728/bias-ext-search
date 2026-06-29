@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class UserSearchResultSchema(BaseModel):
@@ -14,8 +14,7 @@ class UserSearchResultSchema(BaseModel):
         icon: str = ""
         is_hidden: bool = False
 
-        class Config:
-            from_attributes = True
+        model_config = ConfigDict(from_attributes=True)
 
     id: int
     username: str
@@ -27,8 +26,7 @@ class UserSearchResultSchema(BaseModel):
     joined_at: datetime
     primary_group: Optional[GroupBadgeSchema] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DiscussionSearchResultSchema(BaseModel):
@@ -44,8 +42,7 @@ class DiscussionSearchResultSchema(BaseModel):
     last_posted_at: Optional[datetime] = None
     excerpt: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PostSearchResultSchema(BaseModel):
@@ -58,8 +55,7 @@ class PostSearchResultSchema(BaseModel):
     created_at: datetime
     excerpt: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SearchResultSchema(BaseModel):
