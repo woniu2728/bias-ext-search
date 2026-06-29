@@ -208,7 +208,7 @@ class SearchService:
         return database_vendor == "postgresql" and bool(ASCII_TOKEN_RE.search(normalized))
 
     @staticmethod
-    def apply_discussion_search(queryset, query: str, user=None):
+    def apply_discussion_search(queryset, query: str, user=None, filter_context: dict | None = None):
         text_query, parsed_filters = SearchService.extract_filter_tokens(query, targets=("discussion",))
 
         if text_query:
@@ -229,22 +229,28 @@ class SearchService:
                     title_match_q | Q(id__in=Subquery(visible_post_discussion_ids))
                 )
 
+        context = {
+            **dict(filter_context or {}),
+            "user": user,
+            "query": query,
+            "text_query": text_query,
+        }
         queryset = SearchService._apply_parsed_filters(
             queryset,
             parsed_filters,
             "discussion",
-            {"user": user, "query": query, "text_query": text_query},
+            context,
         )
 
         queryset = SearchService._apply_extension_search_mutators(
             "discussion",
             queryset,
-            {"user": user, "query": query, "text_query": text_query},
+            context,
         )
         return queryset
 
     @staticmethod
-    def apply_post_search(queryset, query: str, user=None):
+    def apply_post_search(queryset, query: str, user=None, filter_context: dict | None = None):
         text_query, parsed_filters = SearchService.extract_filter_tokens(query, targets=("post",))
 
         if text_query and SearchService.should_use_postgres_full_text(text_query):
@@ -257,17 +263,23 @@ class SearchService:
         elif text_query:
             queryset = queryset.filter(SearchService.build_text_query(['content'], text_query))
 
+        context = {
+            **dict(filter_context or {}),
+            "user": user,
+            "query": query,
+            "text_query": text_query,
+        }
         queryset = SearchService._apply_parsed_filters(
             queryset,
             parsed_filters,
             "post",
-            {"user": user, "query": query, "text_query": text_query},
+            context,
         )
 
         queryset = SearchService._apply_extension_search_mutators(
             "post",
             queryset,
-            {"user": user, "query": query, "text_query": text_query},
+            context,
         )
         return queryset
 
@@ -326,8 +338,9 @@ class SearchService:
 
     @staticmethod
     def build_search_context(query: str, user=None, include_users: bool = True) -> SearchContext:
-        discussion_queryset = SearchService._discussion_queryset(query, user=user)
-        post_queryset = SearchService._post_queryset(query, user=user)
+        filter_context = {"user": user, "query": query, "_tag_slug_ids_cache": {}}
+        discussion_queryset = SearchService._discussion_queryset(query, user=user, filter_context=filter_context)
+        post_queryset = SearchService._post_queryset(query, user=user, filter_context=filter_context)
         user_queryset = SearchService._user_queryset(query) if include_users else None
 
         return SearchContext(
@@ -552,19 +565,25 @@ class SearchService:
         return content[:length] + '...' if len(content) > length else content
 
     @staticmethod
-    def _discussion_queryset(query: str, user=None):
+    def _discussion_queryset(query: str, user=None, filter_context: dict | None = None):
         discussion_model = _get_search_target_model("discussion")
-        queryset = SearchService.apply_discussion_search(discussion_model.objects.all(), query, user=user).distinct()
+        queryset = SearchService.apply_discussion_search(
+            discussion_model.objects.all(),
+            query,
+            user=user,
+            filter_context=filter_context,
+        ).distinct()
         return _apply_search_target_visibility("discussion", queryset, user=user)
 
     @staticmethod
-    def _post_queryset(query: str, user=None):
+    def _post_queryset(query: str, user=None, filter_context: dict | None = None):
         searchable_post_types = _get_searchable_post_type_codes()
         post_model = _get_search_target_model("post")
         queryset = SearchService.apply_post_search(
             post_model.objects.filter(type__in=searchable_post_types),
             query,
             user=user,
+            filter_context=filter_context,
         )
         return _apply_search_target_visibility("post", queryset, user=user)
 
