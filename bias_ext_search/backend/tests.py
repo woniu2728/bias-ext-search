@@ -14,6 +14,7 @@ from bias_core.extensions.testing import (
     AuditLog,
     ExtensionRuntimeTestMixin,
     PaginationService,
+    assert_runtime_service_contracts,
     build_extension_test_api,
     build_extension_test_host,
     get_forum_registry,
@@ -98,6 +99,7 @@ class SearchIndexDefinitionTests(ExtensionRuntimeTestMixin, TestCase):
         application = self.bootstrap_extensions("search")
         service = application.get_service("search.service")
 
+        assert_runtime_service_contracts(application, "search", "search.service")
         self.assertIn("search.service", application.get_service_provider_keys(extension_id="search"))
         for key in (
             "apply_discussion_search",
