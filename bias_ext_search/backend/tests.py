@@ -81,6 +81,21 @@ Group = RuntimeModelProxy(get_runtime_group_model)
 Permission = RuntimeModelProxy(get_runtime_permission_model)
 
 
+def discussion_tags_payload(tag_ids):
+    return {
+        "data": {
+            "relationships": {
+                "tags": {
+                    "data": [
+                        {"type": "tag", "id": str(tag_id)}
+                        for tag_id in tag_ids
+                    ],
+                },
+            },
+        },
+    }
+
+
 class SearchIndexDefinitionTests(ExtensionRuntimeTestMixin, TestCase):
     def test_search_extension_backend_uses_runtime_targets_not_top_level_content_imports(self):
         search_backend_dir = settings.BASE_DIR / "extensions" / "search" / "backend"
@@ -202,13 +217,20 @@ class ChineseSearchTests(TestCase):
             password="password123",
             is_email_confirmed=True,
         )
+        from bias_ext_tags.backend.models import Tag
+
+        self.search_tag = Tag.objects.create(name="搜索测试", slug="search-tests", color="#16a085")
 
     def auth_header(self, user=None):
         token = RefreshToken.for_user(user or self.user).access_token
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
+    def create_discussion(self, **kwargs):
+        kwargs.setdefault("extension_payload", discussion_tags_payload([self.search_tag.id]))
+        return create_runtime_discussion(**kwargs)
+
     def test_chinese_query_matches_discussion_content(self):
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="无关标题",
             content="这里讨论中文分词搜索和数据库检索体验。",
             user=self.user,
@@ -220,7 +242,7 @@ class ChineseSearchTests(TestCase):
         self.assertEqual(discussions[0].id, discussion.id)
 
     def test_discussion_list_query_uses_chinese_content_search(self):
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="产品反馈",
             content="希望论坛原生支持中文搜索。",
             user=self.user,
@@ -232,7 +254,7 @@ class ChineseSearchTests(TestCase):
         self.assertEqual(discussions[0].id, discussion.id)
 
     def test_discussion_search_marks_matching_reply_as_most_relevant_post(self):
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="Unrelated title",
             content="Opening content",
             user=self.user,
@@ -250,7 +272,7 @@ class ChineseSearchTests(TestCase):
         self.assertEqual(discussions[0].most_relevant_post_id, reply.id)
 
     def test_discussion_search_leaves_title_match_for_first_post_fallback(self):
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="Title fallback needle",
             content="Opening content",
             user=self.user,
@@ -263,12 +285,12 @@ class ChineseSearchTests(TestCase):
         self.assertIsNone(getattr(discussions[0], "most_relevant_post_id", None))
 
     def test_discussion_list_supports_registered_unanswered_sort(self):
-        first_discussion = create_runtime_discussion(
+        first_discussion = self.create_discussion(
             title="零回复讨论",
             content="等待回复",
             user=self.user,
         )
-        answered_discussion = create_runtime_discussion(
+        answered_discussion = self.create_discussion(
             title="已有回复讨论",
             content="已经有回复",
             user=self.user,
@@ -286,7 +308,7 @@ class ChineseSearchTests(TestCase):
         self.assertEqual(discussions[1].id, answered_discussion.id)
 
     def test_discussions_api_returns_registered_sort_catalog(self):
-        create_runtime_discussion(
+        self.create_discussion(
             title="排序目录讨论",
             content="用于测试排序元数据",
             user=self.user,
@@ -302,7 +324,7 @@ class ChineseSearchTests(TestCase):
         self.assertTrue(any(item["code"] == "newest" and item["icon"] == "fas fa-file-alt" for item in payload["available_sorts"]))
 
     def test_discussions_api_returns_registered_filter_catalog(self):
-        create_runtime_discussion(
+        self.create_discussion(
             title="过滤目录讨论",
             content="用于测试过滤元数据",
             user=self.user,
@@ -324,17 +346,17 @@ class ChineseSearchTests(TestCase):
             password="password123",
             is_email_confirmed=True,
         )
-        my_discussion = create_runtime_discussion(
+        my_discussion = self.create_discussion(
             title="我的讨论",
             content="我发起的主题",
             user=self.user,
         )
-        unread_discussion = create_runtime_discussion(
+        unread_discussion = self.create_discussion(
             title="未读讨论",
             content="稍后会产生未读回复",
             user=other_user,
         )
-        read_discussion = create_runtime_discussion(
+        read_discussion = self.create_discussion(
             title="已读讨论",
             content="稍后会被标记已读",
             user=other_user,
@@ -384,12 +406,12 @@ class ChineseSearchTests(TestCase):
         self.assertFalse(SearchService.should_use_postgres_full_text("postgres search", vendor="sqlite"))
 
     def test_search_api_all_returns_section_totals(self):
-        create_runtime_discussion(
+        self.create_discussion(
             title="搜索讨论标题",
             content="这里有搜索内容",
             user=self.user,
         )
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="另一个搜索讨论",
             content="讨论里包含搜索关键字",
             user=self.user,
@@ -421,7 +443,7 @@ class ChineseSearchTests(TestCase):
 
     def test_search_api_preview_mode_returns_capped_section_results_without_full_totals(self):
         for index in range(7):
-            create_runtime_discussion(
+            self.create_discussion(
                 title=f"预览标题专用词 {index}",
                 content="这是一段不会命中标题预览查询的正文",
                 user=self.user,
@@ -452,7 +474,7 @@ class ChineseSearchTests(TestCase):
 
 class SearchApiTests(ChineseSearchTests):
     def test_search_api_posts_type_returns_pagination_metadata(self):
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="分页搜索讨论",
             content="讨论首帖包含分页搜索关键字",
             user=self.user,
@@ -555,7 +577,7 @@ class SearchApiTests(ChineseSearchTests):
 
     def test_search_api_discussions_support_resource_include_for_author(self):
         keyword = "搜索讨论 include 作者"
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title=keyword,
             content="作者 include 讨论内容",
             user=self.user,
@@ -576,7 +598,7 @@ class SearchApiTests(ChineseSearchTests):
 
     def test_search_api_posts_support_resource_include_for_author(self):
         keyword = "搜索回复 include 作者"
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="搜索回复 include 讨论",
             content="首帖内容",
             user=self.user,
@@ -662,7 +684,7 @@ class SearchApiTests(ChineseSearchTests):
     def test_search_api_discussions_type_has_bounded_query_budget(self):
         keyword = "讨论搜索性能预算"
         for index in range(8):
-            create_runtime_discussion(
+            self.create_discussion(
                 title=f"{keyword} {index}",
                 content=f"首帖内容 {index}",
                 user=self.user,
@@ -695,7 +717,7 @@ class SearchApiTests(ChineseSearchTests):
 
     def test_search_api_posts_type_has_bounded_query_budget(self):
         keyword = "帖子搜索性能预算"
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="帖子搜索预算讨论",
             content="首帖内容",
             user=self.user,
@@ -759,12 +781,12 @@ class SearchApiTests(ChineseSearchTests):
             password="password123",
             is_email_confirmed=True,
         )
-        matched = create_runtime_discussion(
+        matched = self.create_discussion(
             title="作者过滤命中",
             content="作者过滤扩展关键字",
             user=self.user,
         )
-        create_runtime_discussion(
+        self.create_discussion(
             title="作者过滤未命中",
             content="作者过滤扩展关键字",
             user=other_user,
@@ -782,17 +804,17 @@ class SearchApiTests(ChineseSearchTests):
         self.assertEqual([item["id"] for item in payload["discussions"]], [matched.id])
 
     def test_search_api_supports_registered_state_filter_syntax(self):
-        sticky = create_runtime_discussion(
+        sticky = self.create_discussion(
             title="置顶过滤讨论",
             content="置顶过滤关键字",
             user=self.user,
         )
-        locked = create_runtime_discussion(
+        locked = self.create_discussion(
             title="锁定过滤讨论",
             content="锁定过滤关键字",
             user=self.user,
         )
-        create_runtime_discussion(
+        self.create_discussion(
             title="普通过滤讨论",
             content="过滤关键字",
             user=self.user,
@@ -826,7 +848,7 @@ class SearchApiTests(ChineseSearchTests):
             password="password123",
             is_email_confirmed=True,
         )
-        discussion = create_runtime_discussion(
+        discussion = self.create_discussion(
             title="帖子作者过滤讨论",
             content="首帖内容",
             user=self.user,
@@ -854,12 +876,12 @@ class SearchApiTests(ChineseSearchTests):
         self.assertEqual([item["id"] for item in payload["posts"]], [matched_post.id])
 
     def test_search_api_supports_registered_unread_filter(self):
-        read_discussion = create_runtime_discussion(
+        read_discussion = self.create_discussion(
             title="已读过滤讨论",
             content="关注过滤关键字",
             user=self.user,
         )
-        unread_discussion = create_runtime_discussion(
+        unread_discussion = self.create_discussion(
             title="未读过滤讨论",
             content="关注过滤关键字",
             user=self.user,
@@ -887,15 +909,15 @@ class SearchApiTests(ChineseSearchTests):
         self.assertEqual([item["id"] for item in unread_response.json()["discussions"]], [unread_discussion.id])
 
     def test_search_api_supports_registered_created_month_filter_for_discussions(self):
-        current_month = timezone.now().strftime("%Y-%m")
-        previous_month = (timezone.now() - timedelta(days=40)).strftime("%Y-%m")
+        current_month = timezone.localtime().strftime("%Y-%m")
+        previous_month = timezone.localtime(timezone.now() - timedelta(days=40)).strftime("%Y-%m")
 
-        matched = create_runtime_discussion(
+        matched = self.create_discussion(
             title="创建月份过滤命中讨论",
             content="创建月份过滤关键字",
             user=self.user,
         )
-        other = create_runtime_discussion(
+        other = self.create_discussion(
             title="创建月份过滤未命中讨论",
             content="创建月份过滤关键字",
             user=self.user,
@@ -918,8 +940,8 @@ class SearchApiTests(ChineseSearchTests):
         self.assertNotEqual(current_month, previous_month)
 
     def test_search_api_supports_registered_created_month_filter_for_posts(self):
-        current_month = timezone.now().strftime("%Y-%m")
-        discussion = create_runtime_discussion(
+        current_month = timezone.localtime().strftime("%Y-%m")
+        discussion = self.create_discussion(
             title="帖子创建月份过滤讨论",
             content="首帖内容",
             user=self.user,
@@ -984,12 +1006,12 @@ class SearchApiTests(ChineseSearchTests):
         self.assertEqual(response.json()["error"], "无效的搜索过滤目标")
 
     def test_search_discussions_does_not_fetch_first_post_per_result(self):
-        create_runtime_discussion(
+        self.create_discussion(
             title="搜索摘要优化一",
             content="第一条摘要内容",
             user=self.user,
         )
-        create_runtime_discussion(
+        self.create_discussion(
             title="搜索摘要优化二",
             content="第二条摘要内容",
             user=self.user,
@@ -1003,12 +1025,12 @@ class SearchApiTests(ChineseSearchTests):
         self.assertTrue(all(discussion.excerpt for discussion in discussions))
 
     def test_search_discussions_uses_subquery_for_first_post_excerpt(self):
-        create_runtime_discussion(
+        self.create_discussion(
             title="子查询摘要优化一",
             content="第一条子查询摘要内容",
             user=self.user,
         )
-        create_runtime_discussion(
+        self.create_discussion(
             title="子查询摘要优化二",
             content="第二条子查询摘要内容",
             user=self.user,
@@ -1023,7 +1045,7 @@ class SearchApiTests(ChineseSearchTests):
 
     def test_search_api_normalizes_page_and_limit(self):
         for index in range(3):
-            create_runtime_discussion(
+            self.create_discussion(
                 title=f"分页归一化搜索 {index}",
                 content="分页归一化内容",
                 user=self.user,
@@ -1048,7 +1070,7 @@ class SearchApiTests(ChineseSearchTests):
         self.assertEqual(limit, 100)
 
     def test_search_api_all_reuses_single_search_context(self):
-        create_runtime_discussion(
+        self.create_discussion(
             title="上下文复用搜索",
             content="上下文复用内容",
             user=self.user,
