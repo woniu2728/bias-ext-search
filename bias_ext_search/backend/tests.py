@@ -529,6 +529,30 @@ class SearchApiTests(ChineseSearchTests):
         self.assertEqual(payload["users"][0]["primary_group"]["name"], group.name)
         self.assertIn("bio", payload["users"][0])
 
+    def test_search_api_users_type_supports_resource_include_for_groups(self):
+        unique_keyword = "用户 include 用户组搜索键13579"
+        matched_user = User.objects.create_user(
+            username="isolated-user-include",
+            email="search-user-include@example.com",
+            password="password123",
+            bio=f"这是一个{unique_keyword}",
+            is_email_confirmed=True,
+        )
+        group = Group.objects.create(name="SearchUserIncludeGroup", color="#16a085", icon="fas fa-user-tag")
+        matched_user.user_groups.add(group)
+
+        response = self.client.get(
+            "/api/search",
+            {"q": unique_keyword, "type": "users", "fields[search_user]": "primary_group", "include": "groups"},
+            **self.auth_header(),
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(payload["users"][0]["primary_group"]["name"], group.name)
+        self.assertEqual(payload["users"][0]["groups"][0]["name"], group.name)
+        self.assertEqual(payload["users"][0]["groups"][0]["icon"], "fas fa-user-tag")
+
     def test_search_api_discussions_support_resource_include_for_author(self):
         keyword = "搜索讨论 include 作者"
         discussion = create_runtime_discussion(

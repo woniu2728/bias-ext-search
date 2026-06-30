@@ -50,6 +50,7 @@ def serialize_user_search_result(user, resource_options=None):
         "search_user",
         user,
         only=resource_options.fields,
+        include=resource_options.includes,
     )
 
 
