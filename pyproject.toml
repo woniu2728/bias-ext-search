@@ -53,3 +53,6 @@ include = ["bias_ext_search*"]
   "frontend/forum/useSearchResultsViewModel.js",
   "frontend/forum/useSearchRouteState.js",
 ]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "bias_core.extension_test_settings"
