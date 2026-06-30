@@ -1,4 +1,3 @@
-import { computed } from '@bias/core'
 <template>
   <article
     class="result-card"
@@ -30,6 +29,7 @@ import { computed } from '@bias/core'
 </template>
 
 <script setup>
+import { computed } from '@bias/core'
 
 const props = defineProps({
   avatarAlt: {
