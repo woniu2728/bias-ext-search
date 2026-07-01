@@ -28,6 +28,14 @@
     "auto_install": true,
     "auto_enable": true
   },
+  "performance_contracts": [
+    {
+      "name": "search_driver_boundary",
+      "message": "database search uses PostgreSQL full text only when supported and keeps extension targets behind runtime services.",
+      "database_boundary": "SearchService.should_use_postgres_full_text",
+      "extension_boundary": "search.target.* runtime services"
+    }
+  ],
   "security": {
     "capabilities_notice": "Search extension; indexes and queries discussion, post, tag, and user-visible content."
   }

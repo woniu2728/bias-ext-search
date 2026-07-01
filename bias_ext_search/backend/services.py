@@ -857,14 +857,6 @@ class SearchService:
     @staticmethod
     def _search_discussions_queryset(queryset, query: str, page: int, limit: int) -> List[Any]:
         queryset = queryset.select_related('user', 'last_posted_user')
-        if SearchService.has_search_target("post"):
-            first_post_model = _get_discussion_first_post_model()
-            first_post_content = first_post_model.objects.filter(
-                id=OuterRef("first_post_id"),
-            ).values("content")[:1]
-            queryset = queryset.annotate(
-                first_post_content=Subquery(first_post_content)
-            )
         if SearchService._queryset_has_annotation(queryset, "search_rank"):
             queryset = queryset.order_by('-is_sticky', '-search_rank', '-comment_count', '-view_count')
         else:
@@ -873,7 +865,30 @@ class SearchService:
         page = SearchService.normalize_page(page)
         limit = SearchService.normalize_limit(limit)
         offset = (page - 1) * limit
-        discussions = list(queryset[offset:offset + limit])
+        page_ids = list(queryset.values_list("pk", flat=True)[offset:offset + limit])
+        if not page_ids:
+            return []
+
+        page_queryset = queryset.model.objects.filter(pk__in=page_ids).select_related('user', 'last_posted_user')
+        if SearchService.has_search_target("post"):
+            first_post_model = _get_discussion_first_post_model()
+            first_post_content = first_post_model.objects.filter(
+                id=OuterRef("first_post_id"),
+            ).values("content")[:1]
+            searchable_post_types = _get_searchable_post_type_codes()
+            relevant_posts = SearchService._matching_discussion_posts_queryset(
+                first_post_model,
+                query,
+                searchable_post_types,
+                postgres=SearchService.should_use_postgres_full_text(query),
+                correlated=True,
+            )
+            page_queryset = page_queryset.annotate(
+                first_post_content=Subquery(first_post_content),
+                most_relevant_post_id=Subquery(relevant_posts.values("id")[:1]),
+            )
+        discussions_by_id = {discussion.pk: discussion for discussion in page_queryset}
+        discussions = [discussions_by_id[discussion_id] for discussion_id in page_ids if discussion_id in discussions_by_id]
 
         for discussion in discussions:
             discussion.excerpt = SearchService.make_excerpt(
@@ -941,11 +956,9 @@ class SearchService:
                 searchable_post_types,
                 postgres=True,
                 user=user,
+                correlated=False,
             )
             search_filter |= Q(id__in=Subquery(matching_posts.values("discussion_id")))
-            queryset = queryset.annotate(
-                most_relevant_post_id=Subquery(matching_posts.values("id")[:1])
-            )
 
         return queryset.filter(search_filter)
 
@@ -961,11 +974,12 @@ class SearchService:
         *,
         postgres: bool = False,
         user=None,
+        correlated: bool = True,
     ):
-        queryset = post_model.objects.filter(
-            discussion_id=OuterRef("pk"),
-            type__in=searchable_post_types,
-        )
+        filters = {"type__in": searchable_post_types}
+        if correlated:
+            filters["discussion_id"] = OuterRef("pk")
+        queryset = post_model.objects.filter(**filters)
         if postgres:
             search_query = SearchService._postgres_search_query(query)
             search_vector = SearchVector("content", config=POSTGRES_FULL_TEXT_CONFIG)

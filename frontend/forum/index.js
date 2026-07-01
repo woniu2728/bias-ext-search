@@ -298,16 +298,22 @@ function searchCopyDefinitions() {
       key: 'search-page-hero-description',
       order: 479,
       surfaces: ['search-page-hero-description'],
-      resolve: ({ hasQuery, searchType, total, discussionTotal, postTotal, userTotal, activeLabel }) => {
+      resolve: ({ hasQuery, searchType, total, discussionTotal, postTotal, userTotal, sourceTotals, activeLabel }) => {
         if (!hasQuery) {
           return {
-            text: '支持在讨论、帖子和用户之间进行全局搜索。',
+            text: '支持在讨论、帖子、用户和扩展结果之间进行全局搜索。',
           }
         }
 
         if (searchType === 'all') {
+          const sourceSummary = buildSearchSourceSummary({
+            discussionTotal,
+            postTotal,
+            sourceTotals,
+            userTotal,
+          })
           return {
-            text: `共找到 ${discussionTotal + postTotal + userTotal} 条结果，已按讨论、帖子和用户分组展示。`,
+            text: `共找到 ${sourceSummary.total} 条结果，已按${sourceSummary.labelText}分组展示。`,
           }
         }
 
@@ -337,8 +343,8 @@ function searchCopyDefinitions() {
       key: 'search-page-stats-label',
       order: 479,
       surfaces: ['search-page-stats-label'],
-      resolve: ({ itemKey }) => ({
-        text: itemKey === 'posts' ? '帖子' : itemKey === 'users' ? '用户' : '讨论',
+      resolve: ({ itemKey, source }) => ({
+        text: source?.label || (itemKey === 'posts' ? '帖子' : itemKey === 'users' ? '用户' : '讨论'),
       }),
     },
     createUiTextCopy('search-section-discussions-title', 479, '讨论'),
@@ -411,4 +417,44 @@ function searchCopyDefinitions() {
 
 function buildSearchTextHtml(value, query, limit) {
   return renderTwemojiHtml(highlightSearchText(value, query, limit))
+}
+
+function buildSearchSourceSummary({
+  discussionTotal = 0,
+  postTotal = 0,
+  sourceTotals = {},
+  userTotal = 0,
+} = {}) {
+  const labelsByKey = {
+    discussions: '讨论',
+    posts: '帖子',
+    users: '用户',
+    tag: '标签',
+    tags: '标签',
+  }
+  const normalizedTotals = {
+    discussions: Number(sourceTotals?.discussions ?? discussionTotal ?? 0),
+    posts: Number(sourceTotals?.posts ?? postTotal ?? 0),
+    users: Number(sourceTotals?.users ?? userTotal ?? 0),
+  }
+
+  for (const [key, value] of Object.entries(sourceTotals || {})) {
+    normalizedTotals[key] = Number(value || 0)
+  }
+
+  const labels = Object.entries(normalizedTotals)
+    .filter(([, count]) => Number(count || 0) > 0)
+    .map(([key]) => labelsByKey[key] || key)
+    .filter(Boolean)
+
+  return {
+    labelText: joinChineseList(labels.length ? labels : ['分类']),
+    total: Object.values(normalizedTotals).reduce((sum, count) => sum + Number(count || 0), 0),
+  }
+}
+
+function joinChineseList(items = []) {
+  if (items.length <= 1) return items[0] || ''
+  if (items.length === 2) return `${items[0]}和${items[1]}`
+  return `${items.slice(0, -1).join('、')}和${items[items.length - 1]}`
 }
